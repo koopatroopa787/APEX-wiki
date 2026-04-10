@@ -1,5 +1,5 @@
 param(
-  [string]$Owner = "yashk",
+  [string]$Owner = "auto",
   [string]$Repo = "APEX-wiki",
   [switch]$Private
 )
@@ -19,6 +19,9 @@ $headers = @{
   "X-GitHub-Api-Version" = "2022-11-28"
 }
 
+$tokenUser = Invoke-RestMethod -Method Get -Uri "https://api.github.com/user" -Headers $headers
+$resolvedOwner = if ($Owner -eq "auto" -or [string]::IsNullOrWhiteSpace($Owner)) { $tokenUser.login } else { $Owner }
+
 $body = @{
   name = $Repo
   private = $isPrivate
@@ -32,11 +35,11 @@ try {
   if ($msg -notmatch "422") { throw }
 }
 
-$tokenRemote = "https://$token@github.com/$Owner/$Repo.git"
+$tokenRemote = "https://$token@github.com/$resolvedOwner/$Repo.git"
 $remotes = git remote
 if ($LASTEXITCODE -eq 0 -and ($remotes -contains "origin")) {
   git remote remove origin
 }
 git remote add origin $tokenRemote
 git push -u origin master
-git remote set-url origin "https://github.com/$Owner/$Repo.git"
+git remote set-url origin "https://github.com/$resolvedOwner/$Repo.git"
