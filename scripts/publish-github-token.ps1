@@ -33,7 +33,10 @@ try {
 }
 
 $tokenRemote = "https://$token@github.com/$Owner/$Repo.git"
-git remote remove origin 2>$null
+git remote get-url origin *> $null
+if ($LASTEXITCODE -eq 0) {
+  git remote remove origin
+}
 git remote add origin $tokenRemote
 git push -u origin master
 git remote set-url origin "https://github.com/$Owner/$Repo.git"
