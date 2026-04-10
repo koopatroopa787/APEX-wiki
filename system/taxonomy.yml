@@ -1,0 +1,28 @@
+types:
+  - entity
+  - concept
+  - topic
+  - source
+  - output
+
+status:
+  - draft
+  - active
+  - superseded
+
+tags:
+  domains:
+    - llm
+    - ai-agents
+    - rag
+    - knowledge-management
+    - obsidian
+  operations:
+    - ingest
+    - query
+    - lint
+    - synthesis
+  evidence:
+    - claim
+    - citation
+    - contradiction

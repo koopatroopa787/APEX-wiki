@@ -1,0 +1,108 @@
+{
+  "vaultId": "llm-wiki",
+  "profile": {
+    "presets": [
+      "personal-research"
+    ],
+    "dashboardPack": "default",
+    "guidedSessionMode": "canonical",
+    "dataviewBlocks": false
+  },
+  "model": {
+    "provider": "heuristic",
+    "model": "heuristic-v1"
+  },
+  "providers": {
+    "heuristic": {
+      "enabled": true
+    },
+    "openai": {
+      "baseUrl": "https://api.openai.com/v1/chat/completions",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "enabled": false
+    },
+    "anthropic": {
+      "baseUrl": "https://api.anthropic.com/v1/messages",
+      "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "enabled": false
+    },
+    "gemini": {
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "enabled": false
+    },
+    "ollama": {
+      "baseUrl": "http://localhost:11434/v1/chat/completions",
+      "apiKeyEnv": "",
+      "enabled": false
+    },
+    "openrouter": {
+      "baseUrl": "https://openrouter.ai/api/v1/chat/completions",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "enabled": false
+    },
+    "groq": {
+      "baseUrl": "https://api.groq.com/openai/v1/chat/completions",
+      "apiKeyEnv": "GROQ_API_KEY",
+      "enabled": false
+    },
+    "together": {
+      "baseUrl": "https://api.together.xyz/v1/chat/completions",
+      "apiKeyEnv": "TOGETHER_API_KEY",
+      "enabled": false
+    },
+    "xai": {
+      "baseUrl": "https://api.x.ai/v1/chat/completions",
+      "apiKeyEnv": "XAI_API_KEY",
+      "enabled": false
+    },
+    "cerebras": {
+      "baseUrl": "https://api.cerebras.ai/v1/chat/completions",
+      "apiKeyEnv": "CEREBRAS_API_KEY",
+      "enabled": false
+    },
+    "openai-compatible": {
+      "baseUrl": "",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "enabled": false
+    },
+    "custom": {
+      "enabled": false,
+      "command": ""
+    }
+  },
+  "semanticTagRules": {
+    "llm": [
+      "llm",
+      "language model",
+      "transformer",
+      "token"
+    ],
+    "ai-agents": [
+      "agent",
+      "tool use",
+      "workflow",
+      "autonomous"
+    ],
+    "rag": [
+      "retrieval",
+      "embedding",
+      "vector",
+      "rag"
+    ],
+    "knowledge-management": [
+      "knowledge",
+      "wiki",
+      "taxonomy",
+      "index",
+      "graph"
+    ],
+    "obsidian": [
+      "obsidian",
+      "dataview",
+      "graph view",
+      "vault",
+      "wikilink"
+    ]
+  }
+}

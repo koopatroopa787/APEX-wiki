@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "APEX-wiki": {
+      "command": "python",
+      "args": ["scripts/apex-wiki.py", "mcp"],
+      "cwd": "E:\\Anti-gravity\\LLM-wiki\\knowledge-system"
+    }
+  }
+}
