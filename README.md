@@ -30,6 +30,7 @@ This vault is an Obsidian-first, LLM-assisted persistent knowledge system.
 - `python scripts/apex-wiki.py dashboards`
 - `python scripts/apex-wiki.py mcp`
 - `powershell -ExecutionPolicy Bypass -File scripts/publish-github.ps1 -Owner <your-username> -Repo APEX-wiki`
+- `powershell -ExecutionPolicy Bypass -File scripts/publish-github-token.ps1 -Owner <your-username> -Repo APEX-wiki` (uses `GH_TOKEN` or `GITHUB_TOKEN`)
 
 ## Model providers
 Supported in config:
