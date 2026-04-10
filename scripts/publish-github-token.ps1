@@ -6,6 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-Location -Path (Split-Path -Parent $PSScriptRoot)
+$PSNativeCommandUseErrorActionPreference = $false
 
 if (-not $env:GH_TOKEN -and -not $env:GITHUB_TOKEN) {
   throw "Set GH_TOKEN or GITHUB_TOKEN first."
@@ -33,8 +34,8 @@ try {
 }
 
 $tokenRemote = "https://$token@github.com/$Owner/$Repo.git"
-git remote get-url origin *> $null
-if ($LASTEXITCODE -eq 0) {
+$existingOrigin = git remote get-url origin 2>$null
+if ($LASTEXITCODE -eq 0 -and $existingOrigin) {
   git remote remove origin
 }
 git remote add origin $tokenRemote
