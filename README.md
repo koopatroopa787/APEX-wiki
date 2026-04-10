@@ -29,6 +29,7 @@ This vault is an Obsidian-first, LLM-assisted persistent knowledge system.
 - `python scripts/apex-wiki.py query "question" --format markdown`
 - `python scripts/apex-wiki.py dashboards`
 - `python scripts/apex-wiki.py mcp`
+- `powershell -ExecutionPolicy Bypass -File scripts/publish-github.ps1 -Owner <your-username> -Repo APEX-wiki`
 
 ## Model providers
 Supported in config:
@@ -42,3 +43,6 @@ Provider behavior:
 
 ## Obsidian + manual edits
 Manual edits are supported and expected. The compiler writes new material into `wiki/candidates/` first; canonical pages update only through approval bundles.
+
+## MCP server list config
+Use `system/agent-integrations/mcp-servers.jsonc` as a shared MCP list entry for clients that support file-based MCP server configuration.
