@@ -50,6 +50,35 @@ LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 CLAIM_RE = re.compile(r"\[claim:([^\]]+)\]\s*(.+)")
 SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9\-]+")
+SUPPORTED_SOURCE_EXTS = {
+    ".md",
+    ".txt",
+    ".rst",
+    ".adoc",
+    ".json",
+    ".csv",
+    ".html",
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".go",
+    ".java",
+    ".rs",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".sql",
+    ".sh",
+    ".ps1",
+    ".dockerfile",
+}
 STOPWORDS = {
     "the",
     "and",
@@ -89,6 +118,7 @@ STOPWORDS = {
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "vaultId": "llm-wiki",
+    "linkedVaults": [],
     "profile": {
         "presets": ["personal-research"],
         "dashboardPack": "default",
@@ -98,6 +128,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "model": {
         "provider": "heuristic",
         "model": "heuristic-v1",
+    },
+    "graph": {
+        "includeLinkedDefault": False,
     },
     "providers": {
         "heuristic": {"enabled": True},
@@ -231,6 +264,10 @@ def load_config() -> dict[str, Any]:
         save_json(CONFIG_PATH, DEFAULT_CONFIG)
         return DEFAULT_CONFIG
     return merge_dict(DEFAULT_CONFIG, load_json(CONFIG_PATH, {}))
+
+
+def save_config(config: dict[str, Any]) -> None:
+    save_json(CONFIG_PATH, config)
 
 
 def ensure_schema() -> None:
@@ -402,7 +439,7 @@ def copy_to_inbox(paths: list[Path], source_id: str) -> list[Path]:
     dst_root.mkdir(parents=True, exist_ok=True)
     for p in paths:
         try:
-            if p.suffix.lower() not in {".md", ".txt", ".rst", ".adoc", ".json", ".csv", ".html"}:
+            if p.suffix.lower() not in SUPPORTED_SOURCE_EXTS:
                 record_diagnostic("parser-compatibility", "Skipped unsupported extension", {"path": str(p)})
                 continue
             dst = dst_root / p.name
@@ -641,7 +678,7 @@ def ingest(target: str, guide: bool, provider_override: str | None = None) -> di
     created_pages: list[Path] = []
     source_id = target if get_source_by_id(target) else None
     for i, fp in enumerate(source_files, start=1):
-        if fp.suffix.lower() not in {".md", ".txt", ".rst", ".adoc", ".json", ".csv", ".html"}:
+        if fp.suffix.lower() not in SUPPORTED_SOURCE_EXTS:
             skipped += 1
             record_diagnostic("parser-compatibility", "Unsupported extension during ingest", {"path": str(fp)})
             continue
@@ -1017,7 +1054,7 @@ def freshness_days(updated_at: str | None) -> int:
         return 9999
 
 
-def build_graph_data() -> dict[str, Any]:
+def build_graph_data(include_linked: bool = False) -> dict[str, Any]:
     pages = collect_pages_for_graph()
     lookup = link_target_candidates(pages)
 
@@ -1143,7 +1180,7 @@ def build_graph_data() -> dict[str, Any]:
     bridge_nodes = [n for n in sorted(nodes, key=lambda x: bridge_scores.get(x["id"], 0), reverse=True)[:10]]
     contradictions = detect_contradictions(parse_claims_from_source_pages())
 
-    return {
+    graph_data = {
         "generatedAt": now_iso(),
         "nodes": nodes,
         "edges": edges,
@@ -1159,6 +1196,68 @@ def build_graph_data() -> dict[str, Any]:
         "bridgeScores": bridge_scores,
         "contradictions": contradictions,
     }
+
+    if include_linked:
+        cfg = load_config()
+        linked = [Path(p).resolve() for p in cfg.get("linkedVaults", [])]
+        local_index_id = "index.md"
+        for linked_path in linked:
+            graph_path = linked_path / "exports" / "graph" / "knowledge-graph.json"
+            if not graph_path.exists():
+                continue
+            linked_graph = load_json(graph_path, {})
+            linked_nodes = linked_graph.get("nodes", [])
+            linked_edges = linked_graph.get("edges", [])
+            prefix = f"linked::{slugify(linked_path.name)}::"
+            for n in linked_nodes:
+                graph_data["nodes"].append(
+                    {
+                        **n,
+                        "id": f"{prefix}{n.get('id')}",
+                        "vault": str(linked_path),
+                        "community": n.get("community", "linked-community"),
+                    }
+                )
+            for e in linked_edges:
+                graph_data["edges"].append(
+                    {
+                        **e,
+                        "source": f"{prefix}{e.get('source')}",
+                        "target": f"{prefix}{e.get('target')}",
+                    }
+                )
+            linked_index = f"{prefix}index.md"
+            if any(n.get("id") == linked_index for n in graph_data["nodes"]) and any(n.get("id") == local_index_id for n in graph_data["nodes"]):
+                graph_data["edges"].append(
+                    {
+                        "source": local_index_id,
+                        "target": linked_index,
+                        "kind": "inferred",
+                        "provenance": {
+                            "source_page": local_index_id,
+                            "source_refs": [],
+                            "claim_id": "linked-vault",
+                            "claim_text": f"linked vault bridge to {linked_path}",
+                        },
+                    }
+                )
+
+    node_ids = {n["id"] for n in graph_data["nodes"]}
+    degree_all: Counter[str] = Counter()
+    for e in graph_data["edges"]:
+        if e.get("source") in node_ids and e.get("target") in node_ids:
+            degree_all[e["source"]] += 1
+            degree_all[e["target"]] += 1
+    for n in graph_data["nodes"]:
+        n["degree"] = degree_all.get(n["id"], n.get("degree", 0))
+    graph_data["metrics"] = {
+        **graph_data.get("metrics", {}),
+        "nodeCount": len(graph_data["nodes"]),
+        "edgeCount": len(graph_data["edges"]),
+        "orphanNodes": len([n for n in graph_data["nodes"] if degree_all.get(n["id"], 0) == 0]),
+        "includeLinked": include_linked,
+    }
+    return graph_data
 
 
 def detect_contradictions(claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1429,12 +1528,13 @@ def build_graph_exports(
     export_svg_flag: bool,
     export_graphml_flag: bool,
     export_cypher_flag: bool,
+    include_linked: bool,
     vault_id: str,
     neo4j_url: str | None,
     neo4j_user: str | None,
     neo4j_password: str | None,
 ) -> dict[str, Any]:
-    graph = build_graph_data()
+    graph = build_graph_data(include_linked=include_linked)
     outputs = {"json": str(export_graph_json(graph)), "gexf": str(export_gexf(graph))}
     if export_graphml_flag:
         outputs["graphml"] = str(export_graphml(graph))
@@ -1453,8 +1553,9 @@ def build_graph_exports(
         [
             f"Nodes: {graph['metrics']['nodeCount']}",
             f"Edges: {graph['metrics']['edgeCount']}",
-            f"Communities: {graph['metrics']['communities']}",
+            f"Communities: {graph['metrics'].get('communities', 0)}",
             f"Orphans: {graph['metrics']['orphanNodes']}",
+            f"Include linked: {include_linked}",
         ],
     )
     return outputs
@@ -1853,6 +1954,99 @@ def build_dashboards(config: dict[str, Any] | None = None) -> list[Path]:
     return paths
 
 
+def initialize_vault_root(vault_root: Path, project_name: str) -> dict[str, Any]:
+    vault_root.mkdir(parents=True, exist_ok=True)
+    for p in [
+        vault_root / "raw" / "inbox",
+        vault_root / "raw" / "processed",
+        vault_root / "raw" / "assets",
+        vault_root / "wiki" / "entities",
+        vault_root / "wiki" / "concepts",
+        vault_root / "wiki" / "topics",
+        vault_root / "wiki" / "sources",
+        vault_root / "wiki" / "outputs" / "source-briefs",
+        vault_root / "wiki" / "outputs" / "source-sessions",
+        vault_root / "wiki" / "outputs" / "source-guides",
+        vault_root / "wiki" / "outputs" / "assets",
+        vault_root / "wiki" / "dashboards",
+        vault_root / "wiki" / "candidates",
+        vault_root / "wiki" / "insights",
+        vault_root / "system" / "agent-integrations",
+        vault_root / "system" / "templates",
+        vault_root / "state" / "approval-bundles",
+        vault_root / "logs",
+        vault_root / "exports" / "graph",
+        vault_root / "scripts",
+    ]:
+        p.mkdir(parents=True, exist_ok=True)
+
+    config = merge_dict(
+        DEFAULT_CONFIG,
+        {
+            "vaultId": slugify(project_name),
+            "linkedVaults": [],
+            "graph": {"includeLinkedDefault": False},
+        },
+    )
+    save_json(vault_root / "apex-wiki.config.json", config)
+    write_text(vault_root / "apex-wiki.schema.md", DEFAULT_SCHEMA)
+    write_text(vault_root / "index.md", "# Knowledge Index\n\n## Dashboards\n- (empty)\n")
+    write_text(vault_root / "logs" / "log.md", f"# Operation Log\n\n## [{today()}] bootstrap | Initialized vault\n- Project: {project_name}\n")
+    save_json(vault_root / "state" / "sources.json", {"sources": []})
+    write_text(vault_root / "README.md", f"# APEX-wiki Vault: {project_name}\n\nOpen this folder directly as an Obsidian vault.\n")
+    write_text(vault_root / ".gitignore", "__pycache__/\n*.pyc\nraw/inbox/\nraw/processed/\nexports/graph/*.svg\nexports/graph/*.html\n")
+
+    # Copy runtime script and helpers so each vault is independently runnable.
+    shutil.copy2(ROOT / "scripts" / "apex-wiki.py", vault_root / "scripts" / "apex-wiki.py")
+    for helper in ["run_pipeline.ps1", "publish-github.ps1", "publish-github-token.ps1"]:
+        src = ROOT / "scripts" / helper
+        if src.exists():
+            shutil.copy2(src, vault_root / "scripts" / helper)
+    if (SYSTEM_DIR / "taxonomy.yml").exists():
+        shutil.copy2(SYSTEM_DIR / "taxonomy.yml", vault_root / "system" / "taxonomy.yml")
+    for template in (SYSTEM_DIR / "templates").glob("*.md"):
+        shutil.copy2(template, vault_root / "system" / "templates" / template.name)
+    return config
+
+
+def create_project_vault(project_name: str, base_dir: str | None = None) -> Path:
+    base = Path(base_dir) if base_dir else (ROOT.parent / "APEX-vaults")
+    vault_root = (base / slugify(project_name)).resolve()
+    if vault_root.exists():
+        raise ValueError(f"Vault already exists: {vault_root}")
+    initialize_vault_root(vault_root, project_name)
+    return vault_root
+
+
+def vault_links() -> list[dict[str, Any]]:
+    config = load_config()
+    links = []
+    for raw in config.get("linkedVaults", []):
+        p = Path(raw).resolve()
+        links.append({"path": str(p), "exists": p.exists(), "graph": str(p / "exports" / "graph" / "knowledge-graph.json")})
+    return links
+
+
+def vault_link(path_str: str) -> dict[str, Any]:
+    target = Path(path_str).resolve()
+    cfg = load_config()
+    links = [str(Path(p).resolve()) for p in cfg.get("linkedVaults", [])]
+    if str(target) not in links:
+        links.append(str(target))
+    cfg["linkedVaults"] = sorted(set(links))
+    save_config(cfg)
+    return {"linkedVaults": cfg["linkedVaults"]}
+
+
+def vault_unlink(path_str: str) -> dict[str, Any]:
+    target = str(Path(path_str).resolve())
+    cfg = load_config()
+    links = [str(Path(p).resolve()) for p in cfg.get("linkedVaults", [])]
+    cfg["linkedVaults"] = [p for p in links if p != target]
+    save_config(cfg)
+    return {"linkedVaults": cfg["linkedVaults"]}
+
+
 AGENTS = [
     "codex",
     "claude-code",
@@ -1893,73 +2087,475 @@ def install_agent_rules(graph_first: bool, only_agents: list[str] | None = None)
 def ensure_mcp_notes() -> None:
     claude_desktop = SYSTEM_DIR / "agent-integrations" / "claude-desktop-mcp.jsonc"
     copilot_cli = SYSTEM_DIR / "agent-integrations" / "copilot-cli-mcp.jsonc"
-    write_text(
-        claude_desktop,
-        textwrap.dedent(
-            """\
-            {
-              "mcpServers": {
-                "APEX-wiki": {
-                  "command": "python",
-                  "args": ["scripts/apex-wiki.py", "mcp"],
-                  "cwd": "E:\\\\Anti-gravity\\\\LLM-wiki\\\\knowledge-system"
-                }
-              }
+    mcp_list = SYSTEM_DIR / "agent-integrations" / "mcp-servers.jsonc"
+    payload = {
+        "mcpServers": {
+            "APEX-wiki": {
+                "command": "python",
+                "args": ["scripts/apex-wiki.py", "mcp"],
+                "cwd": str(ROOT.resolve()),
             }
-            """
-        ),
-    )
-    write_text(
-        copilot_cli,
-        textwrap.dedent(
-            """\
+        }
+    }
+    content = json.dumps(payload, indent=2, ensure_ascii=True) + "\n"
+    write_text(claude_desktop, content)
+    write_text(copilot_cli, content)
+    write_text(mcp_list, content)
+
+
+TOOLS = [
+    {
+        "name": "vault_summary",
+        "description": "Get metrics and summary statistics for the current vault (nodes, edges, communities, orphan count).",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "source_add",
+        "description": "Register a new source in the APEX-wiki sources registry.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The user-friendly name of the source."},
+                "target": {"type": "string", "description": "Target file path, directory path, or URL."},
+                "source_type": {"type": "string", "enum": ["file", "directory", "github", "docs"], "description": "Type of the source (optional)."},
+                "guide": {"type": "boolean", "description": "Whether to automatically create reading guides and sessions.", "default": False},
+            },
+            "required": ["name", "target"],
+        },
+    },
+    {
+        "name": "source_list",
+        "description": "List all registered sources in the vault registry.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "source_reload",
+        "description": "Reload and import files from a registered source into the raw inbox.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source_id": {"type": "string", "description": "The unique ID of the registered source."},
+                "guide": {"type": "boolean", "description": "Whether to ensure reading guides and sessions exist.", "default": False},
+            },
+            "required": ["source_id"],
+        },
+    },
+    {
+        "name": "source_review",
+        "description": "Generate a brief summary report (brief) for a source.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source_id": {"type": "string", "description": "The source ID to review."}
+            },
+            "required": ["source_id"],
+        },
+    },
+    {
+        "name": "source_delete",
+        "description": "Delete a registered source from the registry.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source_id": {"type": "string", "description": "The source ID to delete."}
+            },
+            "required": ["source_id"],
+        },
+    },
+    {
+        "name": "ingest",
+        "description": "Ingest files in the source inbox or a specific directory/file path into the wiki. Extracts claims and tags.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string", "description": "Registered source ID, file path, or directory path to ingest."},
+                "guide": {"type": "boolean", "description": "Whether to ensure guide and session exist.", "default": False},
+                "provider": {"type": "string", "description": "Optional model provider override."},
+            },
+            "required": ["target"],
+        },
+    },
+    {
+        "name": "compile_candidates",
+        "description": "Compile ingested source claims into candidate concepts and entities in wiki/candidates/.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "approve": {"type": "boolean", "description": "If true, automatically stages the candidates into an approval bundle.", "default": False},
+                "source_id": {"type": "string", "description": "Filter by source ID (optional)."},
+            },
+        },
+    },
+    {
+        "name": "bundle_list",
+        "description": "List staged approval bundles.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "bundle_apply",
+        "description": "Promote candidates in an approval bundle to active pages in the vault.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "bundle_id": {"type": "string", "description": "The unique ID of the bundle."},
+                "target": {"type": "string", "enum": ["canonical", "insights"], "description": "Compilation target mode (optional)."},
+            },
+            "required": ["bundle_id"],
+        },
+    },
+    {
+        "name": "lint_vault",
+        "description": "Lint the vault for orphans, stale hubs, contradictions, and taxonomy drift.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "conflicts_only": {"type": "boolean", "description": "Only return contradiction info if true.", "default": False}
+            },
+        },
+    },
+    {
+        "name": "graph_build",
+        "description": "Rebuild, analyze, and export the knowledge graph (JSON, GEXF, GraphML, Cypher, SVG, HTML).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "include_linked": {"type": "boolean", "description": "Include linked vaults in graph construction.", "default": False}
+            },
+        },
+    },
+    {
+        "name": "query_vault",
+        "description": "Query the vault using semantic/heuristic search and generate outputs in selected formats.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "The natural language question to ask."},
+                "format": {"type": "string", "enum": ["markdown", "report", "slides", "chart", "image"], "description": "Output format style.", "default": "markdown"},
+                "no_save": {"type": "boolean", "description": "Do not save the query output to WIKI_OUTPUTS_DIR.", "default": False},
+            },
+            "required": ["question"],
+        },
+    },
+    {
+        "name": "dashboards_build",
+        "description": "Rebuild and update all wiki dashboards.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "vault_create",
+        "description": "Create a new isolated APEX-wiki vault.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The name of the new project vault."},
+                "base_dir": {"type": "string", "description": "Base directory for the new vault (optional)."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "vault_link",
+        "description": "Link another vault for multi-vault graph compilation.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the sibling vault."}
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "vault_unlink",
+        "description": "Unlink a linked vault.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the linked vault."}
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "vault_links",
+        "description": "List all linked vaults.",
+        "inputSchema": {"type": "object", "properties": {}},
+    }
+]
+
+
+def run_tool_safe(func, *args, **kwargs) -> Any:
+    old_stdout = sys.stdout
+    sys.stdout = sys.stderr
+    try:
+        return func(*args, **kwargs)
+    finally:
+        sys.stdout = old_stdout
+
+
+def execute_mcp_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    if name == "vault_summary":
+        graph = run_tool_safe(build_graph_data)
+        metrics = graph.get("metrics", {})
+        return {"content": [{"type": "text", "text": json.dumps(metrics, indent=2)}]}
+    elif name == "source_add":
+        n = arguments.get("name")
+        target = arguments.get("target")
+        source_type = arguments.get("source_type")
+        guide = arguments.get("guide", False)
+        if not n or not target:
+            raise ValueError("Arguments 'name' and 'target' are required.")
+        res = run_tool_safe(add_source, n, target, source_type, guide)
+        return {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+    elif name == "source_list":
+        sources = run_tool_safe(load_sources_state).get("sources", [])
+        return {"content": [{"type": "text", "text": json.dumps(sources, indent=2)}]}
+    elif name == "source_reload":
+        source_id = arguments.get("source_id")
+        guide = arguments.get("guide", False)
+        if not source_id:
+            raise ValueError("Argument 'source_id' is required.")
+        imported = run_tool_safe(reload_source, source_id, guide)
+        return {"content": [{"type": "text", "text": f"Successfully reloaded source '{source_id}'. Imported {len(imported)} files."}]}
+    elif name == "source_review":
+        source_id = arguments.get("source_id")
+        if not source_id:
+            raise ValueError("Argument 'source_id' is required.")
+        brief_path = run_tool_safe(source_review, source_id)
+        return {"content": [{"type": "text", "text": f"Wrote source brief to {rel(brief_path)}"}]}
+    elif name == "source_delete":
+        source_id = arguments.get("source_id")
+        if not source_id:
+            raise ValueError("Argument 'source_id' is required.")
+        ok = run_tool_safe(delete_source, source_id)
+        return {"content": [{"type": "text", "text": f"Deleted source '{source_id}': {ok}"}]}
+    elif name == "ingest":
+        target = arguments.get("target")
+        guide = arguments.get("guide", False)
+        provider = arguments.get("provider")
+        if not target:
+            raise ValueError("Argument 'target' is required.")
+        res = run_tool_safe(ingest, target, guide, provider)
+        return {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+    elif name == "compile_candidates":
+        approve = arguments.get("approve", False)
+        source_id = arguments.get("source_id")
+        res = run_tool_safe(compile_candidates, approve, source_id)
+        return {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+    elif name == "bundle_list":
+        bundles = run_tool_safe(list_bundles)
+        return {"content": [{"type": "text", "text": json.dumps(bundles, indent=2)}]}
+    elif name == "bundle_apply":
+        bundle_id = arguments.get("bundle_id")
+        target = arguments.get("target")
+        if not bundle_id:
+            raise ValueError("Argument 'bundle_id' is required.")
+        res = run_tool_safe(apply_bundle, bundle_id, target)
+        return {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+    elif name == "lint_vault":
+        conflicts_only = arguments.get("conflicts_only", False)
+        res = run_tool_safe(lint, conflicts_only)
+        return {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+    elif name == "graph_build":
+        include_linked = arguments.get("include_linked", False)
+        cfg = run_tool_safe(load_config)
+        vault_id = cfg.get("vaultId", "llm-wiki")
+        out = run_tool_safe(
+            build_graph_exports,
+            True, True, True, True,
+            include_linked,
+            vault_id,
+            None, None, None
+        )
+        return {"content": [{"type": "text", "text": json.dumps(out, indent=2)}]}
+    elif name == "query_vault":
+        question = arguments.get("question")
+        fmt = arguments.get("format", "markdown")
+        no_save = arguments.get("no_save", False)
+        if not question:
+            raise ValueError("Argument 'question' is required.")
+        res = run_tool_safe(query, question, fmt, not no_save)
+        return {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+    elif name == "dashboards_build":
+        cfg = run_tool_safe(load_config)
+        paths = run_tool_safe(build_dashboards, cfg)
+        return {"content": [{"type": "text", "text": "Successfully updated dashboards:\n" + "\n".join(f"- {rel(p)}" for p in paths)}]}
+    elif name == "vault_create":
+        n = arguments.get("name")
+        base_dir = arguments.get("base_dir")
+        if not n:
+            raise ValueError("Argument 'name' is required.")
+        path = run_tool_safe(create_project_vault, n, base_dir)
+        return {"content": [{"type": "text", "text": f"Created new vault at '{path}'"}]}
+    elif name == "vault_link":
+        path = arguments.get("path")
+        if not path:
+            raise ValueError("Argument 'path' is required.")
+        res = run_tool_safe(vault_link, path)
+        return {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+    elif name == "vault_unlink":
+        path = arguments.get("path")
+        if not path:
+            raise ValueError("Argument 'path' is required.")
+        res = run_tool_safe(vault_unlink, path)
+        return {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+    elif name == "vault_links":
+        res = run_tool_safe(vault_links)
+        return {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+    else:
+        raise ValueError(f"Unknown tool name: {name}")
+
+
+def handle_resources_list() -> dict[str, Any]:
+    resources = []
+    index_path = ROOT / "index.md"
+    if index_path.exists():
+        resources.append({
+            "uri": "apex-wiki://index.md",
+            "name": "index.md",
+            "mimeType": "text/markdown",
+            "description": "APEX-wiki main index page"
+        })
+    for p in sorted(WIKI_DIR.rglob("*.md")):
+        if p.is_file():
+            rel_path = rel(p)
+            resources.append({
+                "uri": f"apex-wiki://{rel_path}",
+                "name": p.name,
+                "mimeType": "text/markdown",
+                "description": f"APEX-wiki page: {p.stem} ({p.parent.name})"
+            })
+    return {"resources": resources}
+
+
+def handle_resources_read(uri: str) -> dict[str, Any]:
+    if not uri.startswith("apex-wiki://"):
+        raise ValueError(f"Invalid URI scheme: {uri}")
+    rel_path_str = uri[len("apex-wiki://"):]
+    if ".." in rel_path_str or rel_path_str.startswith("/") or rel_path_str.startswith("\\"):
+        raise ValueError(f"Invalid resource path: {rel_path_str}")
+    target_path = (ROOT / rel_path_str).resolve()
+    if not str(target_path).startswith(str(ROOT.resolve())):
+        raise ValueError(f"Access denied to resource: {rel_path_str}")
+    if not target_path.exists():
+        raise FileNotFoundError(f"Resource not found: {rel_path_str}")
+    text = target_path.read_text(encoding="utf-8", errors="ignore")
+    return {
+        "contents": [
             {
-              "mcpServers": {
-                "APEX-wiki": {
-                  "command": "python",
-                  "args": ["scripts/apex-wiki.py", "mcp"],
-                  "cwd": "E:\\\\Anti-gravity\\\\LLM-wiki\\\\knowledge-system"
-                }
-              }
+                "uri": uri,
+                "mimeType": "text/markdown",
+                "text": text
             }
-            """
-        ),
-    )
+        ]
+    }
+
+
+def make_error(id_val: Any, code: int, message: str, data: Any = None) -> str:
+    err = {"code": code, "message": message}
+    if data is not None:
+        err["data"] = data
+    return json.dumps({
+        "jsonrpc": "2.0",
+        "id": id_val,
+        "error": err
+    }, ensure_ascii=True)
+
+
+def make_result(id_val: Any, result: Any) -> str:
+    return json.dumps({
+        "jsonrpc": "2.0",
+        "id": id_val,
+        "result": result
+    }, ensure_ascii=True)
 
 
 def run_mcp_stdio() -> None:
     ensure_dirs()
     ensure_schema()
-    print(json.dumps({"type": "ready", "name": "apex-wiki-mcp", "generatedAt": now_iso()}), flush=True)
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
+    while True:
         try:
-            req = json.loads(line)
+            line = sys.stdin.readline()
+            if not line:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                req = json.loads(line)
+            except Exception as e:
+                sys.stdout.write(make_error(None, -32700, f"Parse error: {e}") + "\n")
+                sys.stdout.flush()
+                continue
+
+            if not isinstance(req, dict) or "method" not in req:
+                sys.stdout.write(make_error(req.get("id") if isinstance(req, dict) else None, -32600, "Invalid Request") + "\n")
+                sys.stdout.flush()
+                continue
+
+            req_id = req.get("id")
             method = req.get("method")
             params = req.get("params", {})
-            resp: dict[str, Any]
-            if method == "vault.summary":
-                graph = build_graph_data()
-                resp = {"ok": True, "metrics": graph.get("metrics", {})}
-            elif method == "source.list":
-                resp = {"ok": True, "sources": load_sources_state().get("sources", [])}
-            elif method == "query.ask":
-                q = params.get("question", "")
-                fmt = params.get("format", "markdown")
-                resp = {"ok": True, "result": query(q, fmt, save=True)}
-            elif method == "graph.build":
-                cfg = load_config()
-                out = build_graph_exports(True, True, True, True, cfg.get("vaultId", "llm-wiki"), None, None, None)
-                resp = {"ok": True, "outputs": out}
-            elif method == "lint.conflicts":
-                resp = {"ok": True, "result": lint(True)}
+            is_notification = (req_id is None)
+
+            if method == "initialize":
+                resp_result = {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": {},
+                        "resources": {}
+                    },
+                    "serverInfo": {
+                        "name": "apex-wiki-mcp",
+                        "version": "1.1.0"
+                    }
+                }
+                sys.stdout.write(make_result(req_id, resp_result) + "\n")
+                sys.stdout.flush()
+            elif method == "notifications/initialized":
+                pass
+            elif method == "tools/list":
+                sys.stdout.write(make_result(req_id, {"tools": TOOLS}) + "\n")
+                sys.stdout.flush()
+            elif method == "tools/call":
+                tool_name = params.get("name")
+                arguments = params.get("arguments", {})
+                try:
+                    result = execute_mcp_tool(tool_name, arguments)
+                    sys.stdout.write(make_result(req_id, result) + "\n")
+                except Exception as e:
+                    err_result = {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Error executing tool '{tool_name}': {e}"
+                            }
+                        ],
+                        "isError": True
+                    }
+                    sys.stdout.write(make_result(req_id, err_result) + "\n")
+                sys.stdout.flush()
+            elif method == "resources/list":
+                try:
+                    res = handle_resources_list()
+                    sys.stdout.write(make_result(req_id, res) + "\n")
+                except Exception as e:
+                    sys.stdout.write(make_error(req_id, -32603, f"Internal error listing resources: {e}") + "\n")
+                sys.stdout.flush()
+            elif method == "resources/read":
+                uri = params.get("uri")
+                try:
+                    res = handle_resources_read(uri)
+                    sys.stdout.write(make_result(req_id, res) + "\n")
+                except Exception as e:
+                    sys.stdout.write(make_error(req_id, -32603, f"Internal error reading resource: {e}") + "\n")
+                sys.stdout.flush()
             else:
-                resp = {"ok": False, "error": f"Unknown method `{method}`"}
-            print(json.dumps({"id": req.get("id"), "result": resp}), flush=True)
+                if not is_notification:
+                    sys.stdout.write(make_error(req_id, -32601, f"Method not found: {method}") + "\n")
+                    sys.stdout.flush()
         except Exception as e:
-            print(json.dumps({"id": None, "error": str(e)}), flush=True)
+            sys.stderr.write(f"Fatal error in stdin loop: {e}\n")
+            sys.stderr.flush()
 
 
 def inbox_import(path: str) -> list[Path]:
@@ -2073,10 +2669,13 @@ def write_readme() -> None:
         - `python scripts/apex-wiki.py bundle list`
         - `python scripts/apex-wiki.py bundle apply <bundle-id>`
         - `python scripts/apex-wiki.py lint --conflicts`
-        - `python scripts/apex-wiki.py graph`
+        - `python scripts/apex-wiki.py graph --include-linked` (optional linked-vault graph merge)
         - `python scripts/apex-wiki.py query "question" --format markdown`
         - `python scripts/apex-wiki.py dashboards`
         - `python scripts/apex-wiki.py mcp`
+        - `python scripts/apex-wiki.py vault create "project-name"` (creates isolated vault under sibling `APEX-vaults/`)
+        - `python scripts/apex-wiki.py vault link "E:\\path\\to\\another-vault"` (optional graph-level bridge)
+        - `python scripts/apex-wiki.py vault links`
 
         ## Model providers
         Supported in config:
@@ -2154,6 +2753,7 @@ def parse_args() -> argparse.Namespace:
     graph_cmd.add_argument("--neo4j-user", default=None)
     graph_cmd.add_argument("--neo4j-password", default=None)
     graph_cmd.add_argument("--vault-id", default=None)
+    graph_cmd.add_argument("--include-linked", action="store_true")
 
     query_cmd = sub.add_parser("query")
     query_cmd.add_argument("question")
@@ -2161,6 +2761,17 @@ def parse_args() -> argparse.Namespace:
     query_cmd.add_argument("--no-save", action="store_true")
 
     sub.add_parser("dashboards")
+
+    vault_cmd = sub.add_parser("vault", help="Create/link/list project vaults.")
+    vault_sub = vault_cmd.add_subparsers(dest="vault_cmd", required=True)
+    vault_create = vault_sub.add_parser("create")
+    vault_create.add_argument("name")
+    vault_create.add_argument("--base-dir", default=None)
+    vault_link_cmd = vault_sub.add_parser("link")
+    vault_link_cmd.add_argument("path")
+    vault_unlink_cmd = vault_sub.add_parser("unlink")
+    vault_unlink_cmd.add_argument("path")
+    vault_sub.add_parser("links")
 
     agent_cmd = sub.add_parser("install-agent-rules")
     agent_cmd.add_argument("--graph-first", action="store_true")
@@ -2205,6 +2816,23 @@ def main() -> int:
             install_agent_rules(False, None)
             print_json({"ok": True, "message": "bootstrap complete"})
             return 0
+
+        if args.command == "vault":
+            if args.vault_cmd == "create":
+                path = create_project_vault(args.name, args.base_dir)
+                print_json({"vault": str(path), "obsidianOpenPath": str(path)})
+                return 0
+            if args.vault_cmd == "link":
+                out = vault_link(args.path)
+                print_json(out)
+                return 0
+            if args.vault_cmd == "unlink":
+                out = vault_unlink(args.path)
+                print_json(out)
+                return 0
+            if args.vault_cmd == "links":
+                print_json({"linkedVaults": vault_links()})
+                return 0
 
         if args.command == "source":
             if args.source_cmd == "add":
@@ -2266,11 +2894,13 @@ def main() -> int:
 
         if args.command == "graph":
             vault_id = args.vault_id or config.get("vaultId", "llm-wiki")
+            include_linked = bool(args.include_linked or config.get("graph", {}).get("includeLinkedDefault", False))
             out = build_graph_exports(
                 export_html_flag=args.html or True,
                 export_svg_flag=args.svg or True,
                 export_graphml_flag=args.graphml or True,
                 export_cypher_flag=args.cypher or True,
+                include_linked=include_linked,
                 vault_id=vault_id,
                 neo4j_url=args.neo4j_url,
                 neo4j_user=args.neo4j_user,

@@ -5,6 +5,6 @@
 - Which contradictions require manual adjudication?
 
 ## Metrics snapshot
-- nodeCount: 58
-- edgeCount: 121
-- orphanNodes: 6
+- nodeCount: 0
+- edgeCount: 0
+- orphanNodes: 0

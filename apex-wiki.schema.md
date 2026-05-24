@@ -1,28 +1,24 @@
 # apex-wiki.schema.md
 
-## naming rules
-- concepts: `concept-<kebab-case>`
-- entities: `entity-<kebab-case>`
-- topics: `topic-<kebab-case>`
-- sources: `source-<kebab-case>`
-- outputs: `<timestamp>-<kebab-case>`
+## naming
+- concepts: kebab-case, prefix concept-
+- entities: kebab-case, prefix entity-
+- sources: kebab-case, prefix source-
+- outputs: timestamp-prefixed slugs
 
 ## categories
-- entity
 - concept
+- entity
 - topic
 - source
 - output
 
-## grounding requirements
-1. Each non-trivial claim must be traceable to at least one source page.
-2. Every graph edge carries provenance and kind (`extracted|inferred|ambiguous`).
-3. Contradictions must be surfaced in dashboards and lint reports.
-4. Confidence tags must be present on generated pages (`low|medium|high`).
+## grounding
+- every non-trivial claim needs source provenance
+- confidence must be one of: low, medium, high
+- contradictions should be surfaced in dashboards and lint reports
 
-## compilation requirements
-1. New concepts/entities compile into `wiki/candidates/` first.
-2. `compile --approve` stages approval bundles under `state/approval-bundles/`.
-3. Canonical mutation should happen through explicit bundle application.
-4. Guided session mode routes promoted pages to canonical folders or `wiki/insights/`.
-
+## compilation-rules
+- new concepts and entities compile into wiki/candidates first
+- canonical pages are updated through approval bundles only
+- preserve manual edits and append inferred notes in separate sections

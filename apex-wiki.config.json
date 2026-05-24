@@ -1,5 +1,6 @@
 {
-  "vaultId": "llm-wiki",
+  "vaultId": "llm-wiki-core",
+  "linkedVaults": [],
   "profile": {
     "presets": [
       "personal-research"
@@ -11,6 +12,9 @@
   "model": {
     "provider": "heuristic",
     "model": "heuristic-v1"
+  },
+  "graph": {
+    "includeLinkedDefault": false
   },
   "providers": {
     "heuristic": {
@@ -81,27 +85,28 @@
     "ai-agents": [
       "agent",
       "tool use",
-      "workflow",
-      "autonomous"
+      "autonomous",
+      "workflow"
     ],
     "rag": [
       "retrieval",
+      "rag",
       "embedding",
       "vector",
-      "rag"
+      "chunk"
     ],
     "knowledge-management": [
       "knowledge",
       "wiki",
-      "taxonomy",
       "index",
-      "graph"
+      "taxonomy",
+      "ontology"
     ],
     "obsidian": [
       "obsidian",
+      "vault",
       "dataview",
       "graph view",
-      "vault",
       "wikilink"
     ]
   }
