@@ -2895,11 +2895,12 @@ def main() -> int:
         if args.command == "graph":
             vault_id = args.vault_id or config.get("vaultId", "llm-wiki")
             include_linked = bool(args.include_linked or config.get("graph", {}).get("includeLinkedDefault", False))
+            export_all = not (args.html or args.svg or args.graphml or args.cypher)
             out = build_graph_exports(
-                export_html_flag=args.html or True,
-                export_svg_flag=args.svg or True,
-                export_graphml_flag=args.graphml or True,
-                export_cypher_flag=args.cypher or True,
+                export_html_flag=args.html or export_all,
+                export_svg_flag=args.svg or export_all,
+                export_graphml_flag=args.graphml or export_all,
+                export_cypher_flag=args.cypher or export_all,
                 include_linked=include_linked,
                 vault_id=vault_id,
                 neo4j_url=args.neo4j_url,
